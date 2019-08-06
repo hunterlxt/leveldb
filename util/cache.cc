@@ -41,14 +41,14 @@ namespace {
 // are kept in a circular doubly linked list ordered by access time.
 struct LRUHandle {
   void* value;
-  void (*deleter)(const Slice&, void* value);
-  LRUHandle* next_hash;
-  LRUHandle* next;
+  void (*deleter)(const Slice&, void* value); // 清理回调函数，回收资源
+  LRUHandle* next_hash; // 哈希冲突时线性检测
+  LRUHandle* next; // List的下一个
   LRUHandle* prev;
   size_t charge;  // TODO(opt): Only allow uint32_t?
   size_t key_length;
-  bool in_cache;     // Whether entry is in the cache.
-  uint32_t refs;     // References, including cache reference, if present.
+  bool in_cache;     // entry是否在cache中
+  uint32_t refs;     // 引用计数
   uint32_t hash;     // Hash of key(); used for fast sharding and comparisons
   char key_data[1];  // Beginning of key
 
@@ -104,15 +104,15 @@ class HandleTable {
  private:
   // The table consists of an array of buckets where each bucket is
   // a linked list of cache entries that hash into the bucket.
-  uint32_t length_;
-  uint32_t elems_;
-  LRUHandle** list_;
+  uint32_t length_; // 桶的数量
+  uint32_t elems_; // 当前有效项的个数
+  LRUHandle** list_; // 哈希表，每一个位置其实是个桶
 
   // Return a pointer to slot that points to a cache entry that
   // matches key/hash.  If there is no such cache entry, return a
   // pointer to the trailing slot in the corresponding linked list.
   LRUHandle** FindPointer(const Slice& key, uint32_t hash) {
-    LRUHandle** ptr = &list_[hash & (length_ - 1)];
+    LRUHandle** ptr = &list_[hash & (length_ - 1)]; // 与操作就是取余的意思
     while (*ptr != nullptr && ((*ptr)->hash != hash || key != (*ptr)->key())) {
       ptr = &(*ptr)->next_hash;
     }
@@ -120,6 +120,7 @@ class HandleTable {
   }
 
   void Resize() {
+    // 从4开始扩
     uint32_t new_length = 4;
     while (new_length < elems_) {
       new_length *= 2;
@@ -169,10 +170,10 @@ class LRUCache {
   }
 
  private:
-  void LRU_Remove(LRUHandle* e);
-  void LRU_Append(LRUHandle* list, LRUHandle* e);
+  void LRU_Remove(LRUHandle* e); // 将e从lru链中移除
+  void LRU_Append(LRUHandle* list, LRUHandle* e); // 将e插入lru中
   void Ref(LRUHandle* e);
-  void Unref(LRUHandle* e);
+  void Unref(LRUHandle* e); // 减少e的引用次数，引用为0就释放它
   bool FinishErase(LRUHandle* e) EXCLUSIVE_LOCKS_REQUIRED(mutex_);
 
   // Initialized before use.
@@ -182,12 +183,13 @@ class LRUCache {
   mutable port::Mutex mutex_;
   size_t usage_ GUARDED_BY(mutex_);
 
-  // Dummy head of LRU list.
+  // LRU链的虚拟头部
   // lru.prev is newest entry, lru.next is oldest entry.
   // Entries have refs==1 and in_cache==true.
+  // 初始的时候指向自己，淘汰的话就是next的
   LRUHandle lru_ GUARDED_BY(mutex_);
 
-  // Dummy head of in-use list.
+  // in-use链的虚拟头部
   // Entries are in use by clients, and have refs >= 2 and in_cache==true.
   LRUHandle in_use_ GUARDED_BY(mutex_);
 
@@ -203,7 +205,7 @@ LRUCache::LRUCache() : capacity_(0), usage_(0) {
 }
 
 LRUCache::~LRUCache() {
-  assert(in_use_.next == &in_use_);  // Error if caller has an unreleased handle
+  assert(in_use_.next == &in_use_);  // in-use链必须已经是空了
   for (LRUHandle* e = lru_.next; e != &lru_;) {
     LRUHandle* next = e->next;
     assert(e->in_cache);
